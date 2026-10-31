@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Doom on Qwenputer — live</title>
+<style>
+  body { background:#111; color:#ddd; font-family:system-ui,sans-serif; text-align:center; margin:2em; }
+  img { width:min(960px,95vw); image-rendering:pixelated; border:2px solid #333; background:#000; }
+  .sub { color:#888; font-size:.9em; }
+</style>
+</head>
+<body>
+<h2>DOOM on the Qwenputer CPU</h2>
+<img id="fb" src="latest.png" alt="Doom framebuffer">
+<p class="sub">Live framebuffer from the guest CPU, served by the native fast runner (fastemu) paced at 60 fps.</p>
+<script>
+  const img = document.getElementById('fb');
+  setInterval(() => { img.src = 'latest.png?t=' + Date.now(); }, 100);
+</script>
+</body>
+</html>

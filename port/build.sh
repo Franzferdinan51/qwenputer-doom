@@ -21,7 +21,7 @@ echo "libc: $LIBC"
 if [ "$MAP" = stock ]; then LD=$RVENV/rom.ld; else LD=$HERE/qwenputer-big.ld; fi
 
 CFLAGS="-march=$MARCH -mabi=ilp32 -Os -DNORMALUNIX -DCMAP256 \
--DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
+-DDOOMGENERIC_RESX=${RESX:-320} -DDOOMGENERIC_RESY=${RESY:-200} \
 -isystem $PICO/include -I$HERE -I$DG -I$RVENV -Wno-unused-parameter -Wno-unused-variable"
 
 # doomgeneric sources (from its Makefile.soso list), minus the soso platform,

@@ -19,12 +19,22 @@ screen, menu navigation via scripted input, E1M1 loaded and rendering.
 ![Title screen rendered by the guest CPU](docs/title.svg)
 ![E1M1 rendered by the guest CPU](docs/e1m1.svg)
 
-**Next:** the in-weights circuit run on Executor2 (Triton). The game fits the
-circuit's constraints with room to spare on code; the memory map has to grow
-(see below). Two ways to grow it are on the table — recompiling the circuit
-with a Doom-sized map, or keeping the stock verified circuit and letting the
-host executor act purely as a memory controller (banked DROM/RAM). Either
-way, all computation stays in the weights.
+**Also proven:** a native fast runner (`native/fastemu.c`) that executes the
+same reference semantics without building the circuit's token trace —
+852M instructions/s on an M-series Mac (~650 fps in gameplay, vs 0.37 fps
+for the Python reference). Verified state-exact against `ref.py`: at frames
+10 and 30 the full 2 MB RAM, all registers and the PC hash identically, and
+rendered frames match byte-for-byte. It accelerates testing only; the
+in-weights circuit remains the real target.
+
+**Next:** the in-weights circuit run on Executor2 (Triton). The game fits
+the circuit's constraints with room to spare on code; the memory map has to
+grow (see below). Route decided: **recompile the chip layers with the grown
+map**. The alternative — host-side paging against the stock circuit — is
+mechanically impossible: a store commits as a single token with no
+address/value visible to the host, and loads resolve entirely inside the
+circuit, so the host can neither snoop stores nor serve loads. Full
+analysis in `PAGING-DESIGN-NOTES.md`.
 
 ## The machine Doom needs (measured, not guessed)
 
@@ -55,6 +65,15 @@ twice the stock RAM. The growth is in the *map*, not the CPU: RV32IM+Zba,
     it's the size proof)
   - `run_ref.py` — reference-machine shakeout: runs `doom-big.elf`, dumps
     rendered frames as PPM from guest RAM
+- `native/` — `fastemu.c`, the native fast runner (see Status): same
+  semantics as the reference machine, no trace; frame-exact stop/dump on
+  the store that commits each frame, optional `--pace` for watchable
+  live play
+- `live/` — the watchable live view: `run_live.py` (reference machine +
+  PNG frames) and `index.html`; the fast runner serves the same page
+  with `--live latest.png`
+- `PAGING-DESIGN-NOTES.md` — why host paging can't work, and the concrete
+  change list for recompiling the chip layers with the grown map
 - `docs/` — frames captured from the reference-machine run
 - `doomgeneric/` — upstream doomgeneric (fetched by `get-doomgeneric.sh`,
   GPL-2.0, © id Software / Chocolate Doom contributors)
@@ -69,6 +88,15 @@ sudo apt install gcc-riscv64-unknown-elf picolibc-riscv64-unknown-elf
 # e.g. Debian's doom-wad-shareware package ships exactly that file.
 ./port/build.sh big
 python3 port/run_ref.py 130 60000000   # needs the qwenputer fork's rv package on the path
+```
+
+Fast runner (same semantics, no trace):
+
+```sh
+cc -O3 -o fastemu native/fastemu.c -lz
+./fastemu build/doom-big.elf --frames 120 --wad build/doom1.wad \
+    --dump 10,100,120 --dump-dir frames   # frame dumps verify against run_ref.py
+./fastemu build/doom-big.elf --live latest.png --wad build/doom1.wad --pace 60
 ```
 
 ## Credits
