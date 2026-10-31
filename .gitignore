@@ -1,0 +1,7 @@
+build/
+doomgeneric/
+*.wad
+!port/placeholder.wad
+*.deb
+*.ppm
+__pycache__/
