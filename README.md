@@ -16,8 +16,8 @@ machine (`ref.py`) — the executable spec the in-weights circuit is verified
 against instruction-for-instruction. 60M instructions, zero faults: title
 screen, menu navigation via scripted input, E1M1 loaded and rendering.
 
-![Title screen rendered by the guest CPU](docs/title.png)
-![E1M1 rendered by the guest CPU](docs/e1m1.png)
+![Title screen rendered by the guest CPU](docs/title.svg)
+![E1M1 rendered by the guest CPU](docs/e1m1.svg)
 
 **Next:** the in-weights circuit run on Executor2 (Triton). The game fits the
 circuit's constraints with room to spare on code; the memory map has to grow
