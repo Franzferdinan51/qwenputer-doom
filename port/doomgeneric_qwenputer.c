@@ -3,8 +3,9 @@
 // Platform layer for doomgeneric. The machine has:
 //   - no timer   -> the clock is the frame counter: one rendered frame = one 35 Hz tic
 //   - no files   -> the WAD is served from read-only data (DROM) by w_file_qwenputer.c
-//   - no keyboard-> a scripted key sequence (title -> menu -> new game -> play),
-//                   plus a key-state cell the runner can poke between steps
+//   - no keyboard-> a scripted key sequence (title -> menu -> new game),
+//                   then a looping patrol; a demo on/off cell and a
+//                   key-state cell let the runner hand control to a human
 //   - putchar    -> ecall a7=1 (the machine's only output), wired up in the rv env's sys.c
 //
 // The framebuffer lives in guest RAM. The runner reads it (and qwen_frame_count)
@@ -29,6 +30,12 @@ volatile unsigned int qwen_frame_count = 0;
 // Bit layout matches the scripted keys below: 0 up, 1 down, 2 left, 3 right,
 // 4 fire, 5 use, 6 enter, 7 escape.
 volatile unsigned int qwen_key_state = 0;
+
+// Demo on/off, also poked by the runner: 1 = the demo (intro script, then
+// the looping patrol) drives; 0 = the demo lets go — keys it was holding
+// are released, script events already due are drained so they never fire
+// late — and only qwen_key_state (a human at the controls) is read.
+volatile unsigned int qwen_demo_enabled = 1;
 
 void DG_Init(void)
 {
@@ -82,23 +89,109 @@ static const qwen_key_event_t qwen_script[] = {
 static unsigned int qwen_script_pos = 0;
 static int qwen_live_key = 0;  // script index of a live (runner-poked) key being reported
 
+// The patrol: once the intro script has played, the demo keeps the marine
+// moving with this looping pattern (relative frames, cycle = 560). It is a
+// patrol, not a player: forward, shoot, turn, back up, turn, push on
+// doors/walls with USE, shoot again.
+static const qwen_key_event_t qwen_patrol[] = {
+    {   0, KEY_UPARROW,   1 },
+    {  90, KEY_FIRE,      1 }, {  96, KEY_FIRE,      0 },
+    { 102, KEY_FIRE,      1 }, { 108, KEY_FIRE,      0 },
+    { 150, KEY_RIGHTARROW,1 }, { 185, KEY_RIGHTARROW,0 },
+    { 300, KEY_UPARROW,   0 }, { 300, KEY_DOWNARROW, 1 },
+    { 350, KEY_DOWNARROW, 0 },
+    { 360, KEY_LEFTARROW, 1 }, { 395, KEY_LEFTARROW, 0 },
+    { 420, KEY_UPARROW,   1 },
+    { 470, KEY_USE,       1 }, { 476, KEY_USE,       0 },
+    { 500, KEY_FIRE,      1 }, { 506, KEY_FIRE,      0 },
+    { 550, KEY_UPARROW,   0 },
+    { 0, 0, 0 },
+};
+#define QWEN_PATROL_CYCLE 560
+
+static const unsigned char keymap[8] = {
+    KEY_UPARROW, KEY_DOWNARROW, KEY_LEFTARROW, KEY_RIGHTARROW,
+    KEY_FIRE, KEY_USE, KEY_ENTER, KEY_ESCAPE,
+};
+
+static unsigned int demo_held = 0;      // keymap bits the demo is holding down
+static unsigned int patrol_epoch = 0;   // frame the current patrol cycle began
+static unsigned int patrol_pos = 0;
+static unsigned int patrol_last = 0;
+static int patrol_active = 0;
+
+static int demo_event(int *pressed, unsigned char *key,
+                      unsigned char k, int p)
+{
+    int bit = 0;
+    while (bit < 8 && keymap[bit] != k) bit++;
+    if (bit < 8)
+    {
+        if (p) demo_held |= (1u << bit);
+        else   demo_held &= ~(1u << bit);
+    }
+    *key = k;
+    *pressed = p;
+    return 1;
+}
+
 int DG_GetKey(int *pressed, unsigned char *key)
 {
-    // Scripted events first.
-    if (qwen_script[qwen_script_pos].frame != 0 &&
-        qwen_frame_count >= qwen_script[qwen_script_pos].frame)
+    if (!qwen_demo_enabled)
     {
-        *key = qwen_script[qwen_script_pos].key;
-        *pressed = qwen_script[qwen_script_pos].pressed;
-        qwen_script_pos++;
-        return 1;
+        // Demo off: release anything the demo was holding, one key per
+        // call, and drain intro events already due so they can never
+        // fire if the demo is switched back on later.
+        if (demo_held)
+        {
+            int bit = 0;
+            while (!(demo_held & (1u << bit))) bit++;
+            demo_held &= ~(1u << bit);
+            *key = keymap[bit];
+            *pressed = 0;
+            return 1;
+        }
+        while (qwen_script[qwen_script_pos].frame != 0 &&
+               qwen_frame_count >= qwen_script[qwen_script_pos].frame)
+            qwen_script_pos++;
+        patrol_active = 0;
+    }
+    else if (qwen_script[qwen_script_pos].frame != 0)
+    {
+        // Intro script first.
+        if (qwen_frame_count >= qwen_script[qwen_script_pos].frame)
+        {
+            unsigned char k = qwen_script[qwen_script_pos].key;
+            int p = qwen_script[qwen_script_pos].pressed;
+            qwen_script_pos++;
+            return demo_event(pressed, key, k, p);
+        }
+    }
+    else
+    {
+        // Intro done: the patrol loops.
+        if (!patrol_active)
+        {
+            patrol_active = 1;
+            patrol_epoch = qwen_frame_count;
+            patrol_pos = 0;
+            patrol_last = 0;
+        }
+        unsigned int rel = (qwen_frame_count - patrol_epoch) % QWEN_PATROL_CYCLE;
+        if (rel < patrol_last) patrol_pos = 0;   // wrapped into a new cycle
+        patrol_last = rel;
+        // (the terminator's frame is 0, a real offset — bound on pos)
+        if (patrol_pos < (sizeof(qwen_patrol) / sizeof(qwen_patrol[0]) - 1) &&
+            rel >= qwen_patrol[patrol_pos].frame)
+        {
+            unsigned char k = qwen_patrol[patrol_pos].key;
+            int p = qwen_patrol[patrol_pos].pressed;
+            patrol_pos++;
+            return demo_event(pressed, key, k, p);
+        }
     }
 
     // Runner-poked keys: report transitions of qwen_key_state.
-    static const unsigned char keymap[8] = {
-        KEY_UPARROW, KEY_DOWNARROW, KEY_LEFTARROW, KEY_RIGHTARROW,
-        KEY_FIRE, KEY_USE, KEY_ENTER, KEY_ESCAPE,
-    };
     static unsigned int reported_state = 0;
     unsigned int changed = qwen_key_state ^ reported_state;
     if (changed)

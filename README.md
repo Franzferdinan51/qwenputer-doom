@@ -69,9 +69,14 @@ twice the stock RAM. The growth is in the *map*, not the CPU: RV32IM+Zba,
   semantics as the reference machine, no trace; frame-exact stop/dump on
   the store that commits each frame, optional `--pace` for watchable
   live play
-- `live/` — the watchable live view: `run_live.py` (reference machine +
-  PNG frames) and `index.html`; the fast runner serves the same page
-  with `--live latest.png`
+- `live/` — the watchable, playable live view: `index.html` (frame view
+  + on-screen/keyboard controls), `control_server.py` (serves the page
+  and writes the runner's control file), `run_live.py` (reference
+  machine + PNG frames). The demo — intro script, then a looping
+  patrol — drives until a viewer takes control; the page's toggle
+  flips the guest's demo flag and pokes the key-state cell through
+  fastemu's `--control` channel, so a human can play, then hand it
+  back to the patrol
 - `PAGING-DESIGN-NOTES.md` — why host paging can't work, and the concrete
   change list for recompiling the chip layers with the grown map
 - `docs/` — frames captured from the reference-machine run
@@ -97,6 +102,16 @@ cc -O3 -o fastemu native/fastemu.c -lz
 ./fastemu build/doom-big.elf --frames 120 --wad build/doom1.wad \
     --dump 10,100,120 --dump-dir frames   # frame dumps verify against run_ref.py
 ./fastemu build/doom-big.elf --live latest.png --wad build/doom1.wad --pace 60
+```
+
+Playable live view (demo until you take the controls):
+
+```sh
+# symbol addresses below are this build's (nm build/doom-big.elf)
+cd live && python3 control_server.py &   # page + controls on :8950
+./fastemu build/doom-big.elf --live live/latest.png --wad build/doom1.wad \
+    --pace 60 --control live/control.bin \
+    --fb 0xCA3AC --fc 0xD9DD0 --keys 0xD9DCC --demo 0xEB84
 ```
 
 ## Credits

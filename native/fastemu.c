@@ -31,7 +31,14 @@
 // Usage:  fastemu doom-big.elf [--frames N] [--steps N] [--wad doom1.wad]
 //                [--dump 10,100,120 --dump-dir DIR] [--live latest.png]
 //                [--hash-at N] [--fb 0xCA3A8] [--fc 0xD9DB8] [--res 320x200]
-//                [--guest-out FILE|none]
+//                [--guest-out FILE|none] [--pace FPS]
+//                [--control FILE] [--keys 0xD9DB4] [--demo 0xADDR]
+//
+// The control file (8 bytes, mmap-shared with whatever serves the live
+// page) hands the game to a human: bytes 0..3 = the qwen_key_state mask
+// (bit per key: up/down/left/right/fire/use/enter/escape), byte 4 = mode
+// (0 = demo drives, 1 = manual: the demo flag cell is cleared and the
+// mask is poked into the key-state cell, both at frame boundaries).
 
 #define _POSIX_C_SOURCE 200809L
 #include <stdint.h>
@@ -39,6 +46,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <zlib.h>
 
 #define RAM_SIZE  0x200000u
@@ -190,7 +201,23 @@ static void predecode(void) {
 static uint8_t palette[768];
 static int have_palette;
 static uint32_t fb_addr = 0xCA3A8, fc_addr = 0xD9DB8;
+static uint32_t key_addr = 0xD9DB4, demo_addr;   // demo_addr 0 = not poked
+static volatile uint8_t *ctrl;                  // mmap'd control file, 8 B
 static int resx = 320, resy = 200;
+
+static void apply_control(void) {
+    if (!ctrl) return;
+    uint32_t mask;
+    memcpy(&mask, (const void *)ctrl, 4);
+    uint8_t mode = ctrl[4];
+    uint32_t v;
+    if (demo_addr) {
+        v = mode == 0 ? 1 : 0;
+        memcpy(mem + demo_addr, &v, 4);
+    }
+    v = mode == 1 ? mask : 0;
+    memcpy(mem + key_addr, &v, 4);
+}
 
 static int load_palette(const char *wadpath) {
     FILE *f = fopen(wadpath, "rb");
@@ -319,6 +346,7 @@ static double now_s(void) {
 // Called from the SW handler at the exact instruction where
 // qwen_frame_count changed. Returns 1 to stop the run.
 static int frame_hook(uint32_t fc) {
+    apply_control();
     for (int i = 0; i < n_dumps; i++) {
         if (dump_frames[i] == fc && dump_dir && have_palette) {
             char p[1024];
@@ -538,6 +566,7 @@ finish:
 
 int main(int argc, char **argv) {
     const char *elf_path = NULL, *wad_path = NULL, *guest_out = NULL;
+    const char *control_path = NULL;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "--frames") && i + 1 < argc) target_frames = strtoul(argv[++i], NULL, 0);
@@ -550,6 +579,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--guest-out") && i + 1 < argc) guest_out = argv[++i];
         else if (!strcmp(a, "--fb") && i + 1 < argc) fb_addr = strtoul(argv[++i], NULL, 0);
         else if (!strcmp(a, "--fc") && i + 1 < argc) fc_addr = strtoul(argv[++i], NULL, 0);
+        else if (!strcmp(a, "--keys") && i + 1 < argc) key_addr = strtoul(argv[++i], NULL, 0);
+        else if (!strcmp(a, "--demo") && i + 1 < argc) demo_addr = strtoul(argv[++i], NULL, 0);
+        else if (!strcmp(a, "--control") && i + 1 < argc) control_path = argv[++i];
         else if (!strcmp(a, "--dump") && i + 1 < argc) {
             char *copy = strdup(argv[++i]), *tok = strtok(copy, ",");
             while (tok && n_dumps < 64) {
@@ -581,7 +613,17 @@ int main(int argc, char **argv) {
         return 1;
     }
     predecode();
+    if (control_path) {
+        int fd = open(control_path, O_RDWR | O_CREAT, 0644);
+        if (fd < 0) { perror(control_path); return 1; }
+        if (ftruncate(fd, 8)) { perror("ftruncate"); return 1; }
+        void *p = mmap(NULL, 8, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (p == MAP_FAILED) { perror("mmap"); return 1; }
+        ctrl = (volatile uint8_t *)p;
+        close(fd);
+    }
     run_t0 = now_s();
+    apply_control();
     run();
     double el = now_s() - run_t0;
     uint32_t fc = rd32(mem + fc_addr);

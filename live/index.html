@@ -7,15 +7,92 @@
   body { background:#111; color:#ddd; font-family:system-ui,sans-serif; text-align:center; margin:2em; }
   img { width:min(960px,95vw); image-rendering:pixelated; border:2px solid #333; background:#000; }
   .sub { color:#888; font-size:.9em; }
+  .controls { margin:1em auto; max-width:960px; }
+  button { background:#222; color:#ddd; border:1px solid #555; border-radius:8px;
+           padding:.6em 1em; font-size:1em; cursor:pointer; touch-action:none;
+           user-select:none; -webkit-user-select:none; }
+  button.active { background:#7a1f1f; border-color:#c33; }
+  button.mode.active { background:#1f4d7a; border-color:#39c; }
+  .pad { display:grid; grid-template-columns:repeat(3, 64px); gap:6px;
+         justify-content:center; margin:.8em auto; }
+  .pad button { padding:.8em 0; }
+  .row { display:flex; gap:6px; justify-content:center; margin:.4em auto; flex-wrap:wrap; }
 </style>
 </head>
 <body>
 <h2>DOOM on the Qwenputer CPU</h2>
 <img id="fb" src="latest.png" alt="Doom framebuffer">
-<p class="sub">Live framebuffer from the guest CPU, served by the native fast runner (fastemu) paced at 60 fps.</p>
+<p class="sub">Live framebuffer from the guest CPU, served by the native fast runner (fastemu).</p>
+
+<div class="controls">
+  <div class="row">
+    <button id="btn-demo" class="mode active">Demo script: ON</button>
+    <button id="btn-manual" class="mode">Take control</button>
+  </div>
+  <div class="pad">
+    <span></span><button data-bit="0">▲</button><span></span>
+    <button data-bit="2">◀</button><button data-bit="1">▼</button><button data-bit="3">▶</button>
+  </div>
+  <div class="row">
+    <button data-bit="4">FIRE</button>
+    <button data-bit="5">USE</button>
+    <button data-bit="6">ENTER</button>
+    <button data-bit="7">ESC</button>
+  </div>
+  <p class="sub">Keyboard works too: arrows / WASD move, Ctrl = fire, Space = use, Enter, Esc.<br>
+  The demo drives (intro, then a patrol loop) until you take control; handing it back resumes the patrol.</p>
+</div>
+
 <script>
   const img = document.getElementById('fb');
   setInterval(() => { img.src = 'latest.png?t=' + Date.now(); }, 100);
+
+  let mask = 0, mode = 'demo';
+  const btnDemo = document.getElementById('btn-demo');
+  const btnManual = document.getElementById('btn-manual');
+
+  function post(path, obj) {
+    fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify(obj), keepalive: true }).catch(() => {});
+  }
+  function sendKeys() { if (mode === 'manual') post('/api/keys', { mask }); }
+  function setBit(bit, on) {
+    const before = mask;
+    mask = on ? (mask | (1 << bit)) : (mask & ~(1 << bit));
+    if (mask !== before) sendKeys();
+    document.querySelectorAll('button[data-bit="' + bit + '"]')
+      .forEach(b => b.classList.toggle('active', !!on));
+  }
+  function setMode(m) {
+    mode = m;
+    btnDemo.classList.toggle('active', m === 'demo');
+    btnManual.classList.toggle('active', m === 'manual');
+    btnDemo.textContent = m === 'demo' ? 'Demo script: ON' : 'Demo script';
+    btnManual.textContent = m === 'manual' ? 'You have control' : 'Take control';
+    if (m === 'demo') { mask = 0; document.querySelectorAll('button[data-bit]').forEach(b => b.classList.remove('active')); }
+    post('/api/mode', { mode: m });
+  }
+  btnDemo.addEventListener('click', () => setMode('demo'));
+  btnManual.addEventListener('click', () => setMode('manual'));
+
+  document.querySelectorAll('button[data-bit]').forEach(b => {
+    const bit = +b.dataset.bit;
+    b.addEventListener('pointerdown', e => { e.preventDefault(); b.setPointerCapture(e.pointerId); setBit(bit, true); });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev =>
+      b.addEventListener(ev, () => setBit(bit, false)));
+  });
+
+  const keymap = { ArrowUp: 0, KeyW: 0, ArrowDown: 1, KeyS: 1, ArrowLeft: 2, KeyA: 2,
+                   ArrowRight: 3, KeyD: 3, ControlLeft: 4, ControlRight: 4, KeyX: 4,
+                   Space: 5, Enter: 6, Escape: 7 };
+  addEventListener('keydown', e => {
+    if (e.code in keymap) { e.preventDefault(); if (!e.repeat) { if (mode !== 'manual') setMode('manual'); setBit(keymap[e.code], true); } }
+  });
+  addEventListener('keyup', e => {
+    if (e.code in keymap) { e.preventDefault(); setBit(keymap[e.code], false); }
+  });
+
+  fetch('/api/status').then(r => r.json()).then(s => { if (s.mode) setMode(s.mode); }).catch(() => {});
 </script>
 </body>
 </html>
